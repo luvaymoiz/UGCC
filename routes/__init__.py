@@ -11,7 +11,7 @@ import routes.spy_network
 import routes.theinkarchive
 import routes.operationsafeguard
 import routes.blanketyblanks
-import routes.fogofwall
+import routes.fog-of-wall
 import routes.duolingosort
 import routes.sailingclub
 import routes.themagesgambit
