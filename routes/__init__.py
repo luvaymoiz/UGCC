@@ -2,6 +2,8 @@ from flask import Flask
 
 app = Flask(__name__)
 import routes.square
+import routes.trivia    
+import routes.ticketingagent
 import routes.princessdiaries
 import routes.trivia
 import os
@@ -39,3 +41,4 @@ expected_output = {
 }
 
 print(f"▶️  Testing API endpoint: {API_URL}")
+main
