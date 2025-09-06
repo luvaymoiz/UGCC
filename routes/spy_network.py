@@ -7,67 +7,86 @@ logger = logging.getLogger(__name__)
 
 @app.route("/investigate", methods=["POST"])
 def investigate():
-    payload = request.get_json()
-    networks = payload.get("networks", [])
-    results = []
+    try:
+        payload = request.get_json(force=True, silent=False)
 
-    for item in networks:
-        net_id = item["networkId"]
-        edges = item.get("network", [])
+        # Accept both shapes:
+        # 1) {"networks": [...]}  (spec)
+        # 2) [...]                (top-level list, observed in logs)
+        if isinstance(payload, dict):
+            networks = payload.get("networks", [])
+            if not isinstance(networks, list):
+                return jsonify({"error": "'networks' must be a list"}), 400
+        elif isinstance(payload, list):
+            networks = payload
+        else:
+            return jsonify({"error": "JSON must be an object with 'networks' or a list"}), 400
 
-        # Map spy names to integer ids
-        idx = {}
-        def get_id(name):
-            if name not in idx:
-                idx[name] = len(idx)
-            return idx[name]
+        results = []
 
-        # Build adjacency (undirected) with edge indices
-        n_edges = len(edges)
-        u = [0]*n_edges
-        v = [0]*n_edges
-        for i, e in enumerate(edges):
-            u[i] = get_id(e["spy1"])
-            v[i] = get_id(e["spy2"])
+        for item in networks:
+            if not isinstance(item, dict):
+                return jsonify({"error": "each network must be an object"}), 400
 
-        n = len(idx)
-        adj = [[] for _ in range(n)]
-        for i in range(n_edges):
-            a, b = u[i], v[i]
-            adj[a].append((b, i))
-            adj[b].append((a, i))
+            net_id = item.get("networkId")
+            edges = item.get("network", [])
+            if net_id is None or not isinstance(edges, list):
+                return jsonify({"error": "network requires 'networkId' and 'network' list"}), 400
 
-        # Tarjan to find bridges
-        disc = [-1]*n
-        low = [0]*n
-        time = 0
-        bridges = set()
+            # Map spy names to ids
+            idx = {}
+            def gid(name):
+                if name not in idx:
+                    idx[name] = len(idx)
+                return idx[name]
 
-        def dfs(x, pe):
-            nonlocal time
-            disc[x] = low[x] = time
-            time += 1
-            for y, ei in adj[x]:
-                if ei == pe:
-                    continue
-                if disc[y] == -1:
-                    dfs(y, ei)
-                    low[x] = min(low[x], low[y])
-                    if low[y] > disc[x]:
-                        bridges.add(ei)
-                else:
-                    low[x] = min(low[x], disc[y])
+            u, v = [], []
+            for e in edges:
+                if not isinstance(e, dict) or "spy1" not in e or "spy2" not in e:
+                    return jsonify({"error": "edge must have spy1 and spy2"}), 400
+                u.append(gid(e["spy1"]))
+                v.append(gid(e["spy2"]))
 
-        for s in range(n):
-            if disc[s] == -1:
-                dfs(s, -1)
+            n = len(idx)
+            adj = [[] for _ in range(n)]
+            for i, (a, b) in enumerate(zip(u, v)):
+                adj[a].append((b, i))
+                adj[b].append((a, i))
 
-        # Non-bridges are extra channels (they lie on cycles)
-        extra = []
-        for i, e in enumerate(edges):
-            if i not in bridges:
-                extra.append({"spy1": e["spy1"], "spy2": e["spy2"]})
+            # Tarjan bridges
+            disc = [-1]*n
+            low  = [0]*n
+            time = 0
+            bridges = set()
 
-        results.append({"networkId": net_id, "extraChannels": extra})
+            def dfs(x, pe):
+                nonlocal time
+                disc[x] = low[x] = time
+                time += 1
+                for y, ei in adj[x]:
+                    if ei == pe:
+                        continue
+                    if disc[y] == -1:
+                        dfs(y, ei)
+                        low[x] = min(low[x], low[y])
+                        if low[y] > disc[x]:
+                            bridges.add(ei)
+                    else:
+                        low[x] = min(low[x], disc[y])
 
-    return jsonify({"networks": results})
+            for s in range(n):
+                if disc[s] == -1:
+                    dfs(s, -1)
+
+            extra = []
+            for i, e in enumerate(edges):
+                if i not in bridges:
+                    extra.append({"spy1": e["spy1"], "spy2": e["spy2"]})
+
+            results.append({"networkId": net_id, "extraChannels": extra})
+
+        return jsonify({"networks": results})
+
+    except Exception:
+        logger.exception("Error in /investigate")
+        return jsonify({"error": "internal error"}), 500
