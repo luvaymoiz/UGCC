@@ -1,133 +1,94 @@
-import sys
-from flask import Flask, request, jsonify
-import ast
-import math
-import re
-import logging
 from routes import app
+import json
+import logging
+from flask import request, jsonify
+from routes import app
+import sympy
+import re
 
 logger = logging.getLogger(__name__)
 
-# --- 1. LaTeX to Python Translation ---
-LATEX_REPLACEMENTS = {
-    "=": "",
-    "$$": "",
-    "$": "",
-    "\\text": "",
-    "\\{": "(",
-    "\\}": ")",
-    "{": "(",
-    "}": ")",
-    "\\left(": "(",
-    "\\right)": ")",
-    "\\times": "*",
-    "\\cdot": "*",
-    "\\frac": "",  # Handled by regex
-    "e^": "math.exp",
-    "^": "**",
-    "\\log": "math.log",
-    "\\max": "max",
-    "\\min": "min",
-    "\\sum": "sum",
-    "\\alpha": "alpha", "\\beta": "beta", "\\gamma": "gamma", "\\delta": "delta",
-    "\\epsilon": "epsilon", "\\zeta": "zeta", "\\eta": "eta", "\\theta": "theta",
-    "\\iota": "iota", "\\kappa": "kappa", "\\lambda": "lambda", "\\mu": "mu",
-    "\\nu": "nu", "\\xi": "xi", "\\omicron": "omicron", "\\pi": "pi",
-    "\\rho": "rho", "\\sigma": "sigma", "\\tau": "tau", "\\upsilon": "upsilon",
-    "\\phi": "phi", "\\chi": "chi", "\\psi": "psi", "\\omega": "omega"
-}
-
-def latex_to_python_safe(expr: str) -> str:
+def preprocess_formula(formula_str: str) -> str:
     """
-    A robust function to translate LaTeX to a Python expression.
+    Cleans and standardizes the LaTeX formula string for parsing.
+
+    This function isolates the mathematical expression, removes LaTeX text formatting,
+    and maps special LaTeX variable notations to plain text equivalents.
     """
-    # Use re.sub to handle fractions like \frac{num}{den} -> (num)/(den)
-    expr = re.sub(r'\\frac\s*\{([^}]+)\}\s*\{([^}]+)\}', r'(\1)/(\2)', expr)
-    
-    # Use re.sub for cleaner variable name replacement
-    expr = re.sub(r'\\([A-Za-z]+)', r'\1', expr)  # Replace Greek letters
-    expr = re.sub(r'([A-Za-z0-9_]+)\[([^\]]+)\]', r'\1_\2', expr) # E[R_p] -> E_R_p
-    
-    # Apply all other simple string replacements
-    for latex, python in LATEX_REPLACEMENTS.items():
-        expr = expr.replace(latex, python)
-        
-    return expr.strip()
+    # 1. Isolate the expression on the right-hand side of the equation.
+    if '=' in formula_str:
+        formula_str = formula_str.split('=', 1)[1]
 
-# --- 2. Safe Expression Evaluation ---
-ALLOWED_NODES = {
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Load, ast.Constant,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.USub, ast.UAdd,
-    ast.Call, ast.Name, ast.Attribute, ast.Tuple, ast.Compare, ast.BoolOp, ast.And, ast.Or,
-    ast.Gt, ast.Lt, ast.Eq, ast.NotEq, ast.GtE, ast.LtE
-}
+    # 2. Remove LaTeX math mode delimiters.
+    formula_str = formula_str.replace('$$', '').strip()
 
-ALLOWED_NAMES = {
-    "math": math,
-    "max": max,
-    "min": min,
-    "sum": sum,
-    "abs": abs,
-}
+    # 3. Replace '\\text{...}' with its content.
+    formula_str = re.sub(r'\\text\{([^}]+)\}', r'\1', formula_str)
 
-def _check_ast_nodes(node):
-    if type(node) not in ALLOWED_NODES:
-        raise ValueError(f"Disallowed expression syntax: {type(node).__name__}")
-    for child in ast.iter_child_nodes(node):
-        _check_ast_nodes(child)
+    # 4. Standardize multiplication and exponentiation operators.
+    formula_str = formula_str.replace('\\times', '*')
+    formula_str = formula_str.replace('\\cdot', '*')
+    formula_str = formula_str.replace('^', '**')
 
-def safe_eval(expr: str, variables: dict) -> float:
-    """
-    Safely evaluates a Python expression string using an AST whitelist.
-    """
-    if not expr.strip():
-        raise ValueError("Expression is empty.")
+    # 5. Map special LaTeX notations for variables to a consistent text format.
+    #    This ensures variable names in the formula match the keys in the JSON input.
+    replacements = {
+        "E[R_m]": "E_R_m",
+        "E[R_p]": "E_R_p",
+        "E[R_i]": "E_R_i",
+        "\\beta_i": "beta_i",
+        "Z_\\alpha": "Z_alpha",
+        "\\sigma_p": "sigma_p"
+    }
+    for latex, text in replacements.items():
+        formula_str = formula_str.replace(latex, text)
 
-    # The evaluation environment, including allowed functions and variables
-    env = {**ALLOWED_NAMES, **variables}
-    
-    # Parse the expression into an AST
-    node = ast.parse(expr, mode="eval")
+    # Note: Standard LaTeX functions like \\frac, \\max, \\log are natively
+    # handled by sympy's parser and do not need to be replaced.
+    return formula_str
 
-    # Check the AST against the whitelist
-    _check_ast_nodes(node)
-    
-    # If checks pass, compile and evaluate the expression in the safe environment
-    return float(eval(compile(node, "<expr>", "eval"), {"__builtins__": {}}, env))
-
-# --- 3. API Endpoint ---
 @app.route("/trading-formula", methods=["POST"])
-def trading_formula_endpoint():
+def evaluate_formulas():
+    """
+    Flask endpoint to evaluate a list of financial formulas.
+
+    Accepts a JSON array of test cases and returns a JSON array of results.
+    """
     try:
-        test_cases = request.get_json()
-        if not isinstance(test_cases, list):
-            return jsonify({"error": "Input must be a JSON array"}), 400
+        data = request.get_json(force=True, silent=False)
+        if not isinstance(data, list):
+            return jsonify({"error": "Request body must be a JSON array of test cases"}), 400
 
-        results = []
-        for case in test_cases:
-            try:
-                formula = case.get("formula", "")
-                variables = {k: float(v) for k, v in case.get("variables", {}).items()}
-                
-                logger.info(f"Processing formula: {formula} with variables: {variables}")
+        response_results = []
+        for test_case in data:
+            formula = test_case.get("formula")
+            variables = test_case.get("variables")
 
-                # Translate and evaluate
-                python_expr = latex_to_python_safe(formula)
-                value = safe_eval(python_expr, variables)
-                
-                # Format and append result
-                results.append({"result": f"{value:.4f}"})
+            if not all([formula, isinstance(variables, dict)]):
+                response_results.append({"name": test_case.get("name"), "error": "Invalid test case format"})
+                continue
+            
+            # Step 1: Preprocess the LaTeX formula.
+            processed_formula_str = preprocess_formula(formula)
 
-            except Exception as e:
-                logger.error(f"Error evaluating case: {e}. Original formula: '{case.get('formula')}'")
-                results.append({"result": f"Error: {e}"})
+            # Step 2: Parse the string into a symbolic expression using sympy.
+            # We provide a dictionary of symbols to ensure variables are correctly identified.
+            symbols = {k: sympy.Symbol(k) for k in variables.keys()}
+            parsed_expression = sympy.parsing.latex.parse_latex(processed_formula_str, local_dict=symbols)
 
-        return jsonify(results)
+            # Step 3: Substitute the numerical values for the symbols.
+            substituted_expression = parsed_expression.subs(variables)
+
+            # Step 4: Evaluate the final expression to a floating-point number.
+            numerical_result = float(substituted_expression.evalf())
+
+            # Step 5: Round the result to four decimal places as required.
+            final_result = round(numerical_result, 4)
+
+            response_results.append({"result": final_result})
 
     except Exception as e:
-        logger.error(f"A server error occurred: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# --- 4. Main execution block for local testing ---
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+        logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
+    
+    return jsonify(response_results)
