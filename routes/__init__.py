@@ -8,6 +8,7 @@ import routes.princessdiaries
 import routes.trivia
 import routes.tradingformula
 import routes.spy_network
+import routes.theinkarchive
 import routes.operationsafeguard
 import routes.blanketyblanks
 import os
