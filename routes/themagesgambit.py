@@ -3,15 +3,20 @@ import logging
 from flask import request, jsonify
 from routes import app
 
+# Logger setup
+name = __name__
+logger = logging.getLogger(name)
 
-logger = logging.getLogger(__name__)
+# Set the logging level to DEBUG for more detailed information
+logging.basicConfig(level=logging.DEBUG)
 
 def _validate_payload(item):
+    logger.debug("Validating payload: %s", item)
     # required keys
     for k in ("intel", "reserve", "fronts", "stamina"):
         if k not in item:
             raise ValueError(f"missing key: {k}")
-
+    
     intel = item["intel"]
     reserve = item["reserve"]
     fronts = item["fronts"]
@@ -35,17 +40,11 @@ def _validate_payload(item):
             raise ValueError(f"intel[{idx}] front out of range 1..{fronts}")
         if mp < 1 or mp > reserve:
             raise ValueError(f"intel[{idx}] mp out of range 1..{reserve}")
+    logger.debug("Payload validated successfully")
 
 def _earliest_time_minutes(intel, reserve, stamina_max):
     """
-    Rules implemented per 'The Mage's Gambit':
-    - Each spell normally costs 10 minutes to set target.
-    - If the next spell is immediately on the SAME front (no cooldown between),
-      it can be 'extended' with 0 extra minutes.
-    - Must follow intel order; cannot skip/reorder.
-    - Casting consumes MP and 1 stamina. If next cast would exceed MP or stamina,
-      do a cooldown: +10 minutes, then MP and stamina fully recover.
-    - After all undead are defeated, Klein must be in cooldown: add a final +10 minutes.
+    Refined time calculation with respect to edge cases and constraints.
     """
     time = 0
     mp = reserve
@@ -53,16 +52,20 @@ def _earliest_time_minutes(intel, reserve, stamina_max):
     prev_front = None
     previous_action_was_cast = False
 
-    for front, cost in intel:
-        # recover if needed before this cast
+    logger.debug("Starting time calculation")
+    for idx, (front, cost) in enumerate(intel):
+        logger.debug("Casting spell %d: front=%d, cost=%d, mp=%d, stamina=%d", idx + 1, front, cost, mp, stamina)
+
+        # If resources are exhausted (MP or stamina), cooldown is required
         if stamina == 0 or mp < cost:
+            logger.debug("Not enough resources, triggering cooldown")
             time += 10  # cooldown
             mp = reserve
             stamina = stamina_max
             prev_front = None
             previous_action_was_cast = False
 
-        # cast this spell
+        # Cast the spell; no additional time if it's on the same front consecutively
         cast_time = 0 if (previous_action_was_cast and prev_front == front) else 10
         time += cast_time
         mp -= cost
@@ -70,14 +73,18 @@ def _earliest_time_minutes(intel, reserve, stamina_max):
         prev_front = front
         previous_action_was_cast = True
 
-    # final cooldown so Klein can immediately join expedition
+        logger.debug("After casting: time=%d, mp=%d, stamina=%d", time, mp, stamina)
+
+    # Final cooldown after all undead are defeated
     time += 10
+    logger.debug("Final cooldown added, total time: %d", time)
     return time
 
 @app.route("/the-mages-gambit", methods=["POST"])
 def the_mages_gambit():
     try:
         data = request.get_json(force=True, silent=False)
+        logger.debug("Received data: %s", data)
     except Exception as e:
         logger.exception("Invalid JSON payload")
         return jsonify({"error": "Invalid JSON"}), 400
@@ -93,6 +100,7 @@ def the_mages_gambit():
     results = []
     try:
         for item in items:
+            logger.debug("Processing item: %s", item)
             _validate_payload(item)
             time_minutes = _earliest_time_minutes(
                 intel=item["intel"],
@@ -100,6 +108,7 @@ def the_mages_gambit():
                 stamina_max=item["stamina"],
             )
             results.append({"time": time_minutes})
+            logger.debug("Calculated time for item: %d", time_minutes)
     except ValueError as ve:
         logger.warning("Validation error: %s", ve)
         return jsonify({"error": str(ve)}), 400
@@ -108,4 +117,5 @@ def the_mages_gambit():
         return jsonify({"error": "Internal server error"}), 500
 
     # Always return a JSON array as per the samples
+    logger.debug("Returning results: %s", results)
     return jsonify(results), 200
