@@ -13,6 +13,7 @@ import routes.operationsafeguard
 import routes.blanketyblanks
 import routes.fogofwall
 import routes.duolingosort
+import routes.sailingclub
 import os
 
 
