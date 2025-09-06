@@ -6,14 +6,13 @@ import json
 
 logger = logging.getLogger(__name__)
 
-@app.route('/evaluate', methods=['POST'])
+@app.route('/princess-diaries', methods=['POST'])
 
 
 # --- Solution Code ---
 # This is the solver function from the previous response.
 
 def solve_princess_schedule(data):
-    
     """
     Finds the optimal schedule for the princess to maximize score and minimize travel fees.
     """
@@ -118,20 +117,30 @@ def solve_princess_schedule(data):
         "schedule": schedule_names
     }
 
+def evaluate_princess_diaries():
+    """
+    This function handles the web request.
+    """
+    try:
+        # Get the JSON data that the client sent
+        input_data = request.get_json()
+        logger.info(f"Received data for evaluation: {input_data}")
+
+        # Call your logic function to get the result
+        result = solve_princess_schedule(input_data)
+        logger.info(f"Calculation result: {result}")
+
+        # =============================================================
+        # THIS IS THE CORRECT WAY TO RETURN THE RESPONSE
+        # It uses jsonify() as you rightly pointed out.
+        # =============================================================
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"An error occurred during evaluation: {e}")
+        # Also use jsonify for error messages
+        return jsonify({"error": "An internal server error occurred."}), 500
 
 
-# --- API Endpoint ---
-# This defines the URL and method for our API.
-@app.route('/testprincessdiaries', methods=['POST'])
-def evaluate_princessdiaries():
-    # Get the JSON data sent in the request body
-    input_data = request.get_json()
-    logger.info(f"Received: {input_data}")
-    
-    # Call the solver function with the input data
-    result = solve_princess_schedule(input_data)
-    
-    logger.info(f"Returned: {result}")
-    
-    # Return the result as a JSON response
-    return json.dumps(result)
+# ... (The rest of your solve_princess_schedule function is below this) ...
+
