@@ -1,94 +1,94 @@
-import logging
-import math
-import re
-from flask import Flask, request, jsonify
-from werkzeug.exceptions import BadRequest
 from routes import app
-
+import json
+import logging
+from flask import request, jsonify
+from routes import app
+import sympy
+import re
 
 logger = logging.getLogger(__name__)
 
-# 2. Core Evaluation Logic (from previous solution)
-def solve_formula(formula_str: str, variables: dict) -> float:
-    expression = formula_str
-    while "\\\\" in expression:
-        expression = expression.replace("\\\\", "\\")
-    
-    expression = re.sub(r"^(.*?=)", "", expression).strip().replace("$$", "")
+def preprocess_formula(formula_str: str) -> str:
+    """
+    Cleans and standardizes the LaTeX formula string for parsing.
 
-    sorted_vars = sorted(variables.keys(), key=len, reverse=True)
-    for var_name in sorted_vars:
-        expression = expression.replace(f"\\text{{{var_name}}}", str(variables[var_name]))
-        expression = expression.replace(var_name, str(variables[var_name]))
+    This function isolates the mathematical expression, removes LaTeX text formatting,
+    and maps special LaTeX variable notations to plain text equivalents.
+    """
+    # 1. Isolate the expression on the right-hand side of the equation.
+    if '=' in formula_str:
+        formula_str = formula_str.split('=', 1)[1]
 
+    # 2. Remove LaTeX math mode delimiters.
+    formula_str = formula_str.replace('$$', '').strip()
+
+    # 3. Replace '\\text{...}' with its content.
+    formula_str = re.sub(r'\\text\{([^}]+)\}', r'\1', formula_str)
+
+    # 4. Standardize multiplication and exponentiation operators.
+    formula_str = formula_str.replace('\\times', '*')
+    formula_str = formula_str.replace('\\cdot', '*')
+    formula_str = formula_str.replace('^', '**')
+
+    # 5. Map special LaTeX notations for variables to a consistent text format.
+    #    This ensures variable names in the formula match the keys in the JSON input.
     replacements = {
-        r"\times": "*", r"\cdot": "*", r"\frac{": "(", r"}{": ")/(",
-        r"\max": "max", r"\min": "min", r"e^": "math.exp", r"\log": "math.log",
-        r"\sum": "sum", r"{": "(", r"}": ")", r"[": "(", r"]": ")",
+        "E[R_m]": "E_R_m",
+        "E[R_p]": "E_R_p",
+        "E[R_i]": "E_R_i",
+        "\\beta_i": "beta_i",
+        "Z_\\alpha": "Z_alpha",
+        "\\sigma_p": "sigma_p"
     }
-    for latex, python_syntax in replacements.items():
-        expression = expression.replace(latex, python_syntax)
-    
-    expression = expression.replace("\\", "")
-    expression = "".join(expression.split())
-    
-    logger.info(f"Translated expression for evaluation: '{expression}'")
-    
-    safe_context = {
-        "max": max, "min": min, "sum": sum, "math": math, "__builtins__": None
-    }
-    
-    result = eval(expression, safe_context)
-    return float(result)
+    for latex, text in replacements.items():
+        formula_str = formula_str.replace(latex, text)
 
+    # Note: Standard LaTeX functions like \\frac, \\max, \\log are natively
+    # handled by sympy's parser and do not need to be replaced.
+    return formula_str
 
-# 3. Flask API Endpoint
 @app.route("/trading-formula", methods=["POST"])
-def evaluate_trading_formula():
-    logger.info("Received request on /trading-formula endpoint.")
-    
+def evaluate_formulas():
+    """
+    Flask endpoint to evaluate a list of financial formulas.
+
+    Accepts a JSON array of test cases and returns a JSON array of results.
+    """
     try:
-        # This is where the error from your screenshot occurs.
-        # It fails if the request body is not valid JSON.
-        test_cases = request.get_json()
+        data = request.get_json(force=True, silent=False)
+        if not isinstance(data, list):
+            return jsonify({"error": "Request body must be a JSON array of test cases"}), 400
 
-        if not isinstance(test_cases, list):
-            logger.error("Invalid JSON format: A JSON array was expected.")
-            return jsonify({"error": "Input must be a JSON array"}), 400
+        response_results = []
+        for test_case in data:
+            formula = test_case.get("formula")
+            variables = test_case.get("variables")
 
-        response_data = []
-        for case in test_cases:
-            name = case.get('name', 'Unnamed Case')
-            try:
-                formula = case.get("formula")
-                variables = case.get("variables")
-                
-                if not all([formula, isinstance(variables, dict)]):
-                    raise ValueError("'formula' and 'variables' are required fields.")
+            if not all([formula, isinstance(variables, dict)]):
+                response_results.append({"name": test_case.get("name"), "error": "Invalid test case format"})
+                continue
+            
+            # Step 1: Preprocess the LaTeX formula.
+            processed_formula_str = preprocess_formula(formula)
 
-                numerical_result = solve_formula(formula, variables)
-                rounded_result = round(numerical_result, 4)
-                response_data.append({"result": rounded_result})
-                logger.info(f"Successfully processed '{name}'. Result: {rounded_result}")
+            # Step 2: Parse the string into a symbolic expression using sympy.
+            # We provide a dictionary of symbols to ensure variables are correctly identified.
+            symbols = {k: sympy.Symbol(k) for k in variables.keys()}
+            parsed_expression = sympy.parsing.latex.parse_latex(processed_formula_str, local_dict=symbols)
 
-            except Exception as e:
-                logger.error(f"Error processing case '{name}': {e}", exc_info=True)
-                return jsonify({
-                    "error": f"Failed to process case '{name}'",
-                    "details": str(e)
-                }), 400
-        
-        return jsonify(response_data)
+            # Step 3: Substitute the numerical values for the symbols.
+            substituted_expression = parsed_expression.subs(variables)
 
-    except BadRequest as e:
-        # This specifically catches JSON decoding errors
-        logger.error(f"Request body is not valid JSON. Details: {e.description}")
-        return jsonify({"error": "Malformed JSON received.", "details": e.description}), 400
+            # Step 4: Evaluate the final expression to a floating-point number.
+            numerical_result = float(substituted_expression.evalf())
+
+            # Step 5: Round the result to four decimal places as required.
+            final_result = round(numerical_result, 4)
+
+            response_results.append({"result": final_result})
+
     except Exception as e:
-        logger.critical(f"An unexpected internal server error occurred: {e}", exc_info=True)
-        return jsonify({"error": "An internal server error occurred."}), 500
-
-
-# Main execution block
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+        logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+        return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
+    
+    return jsonify(response_results)
