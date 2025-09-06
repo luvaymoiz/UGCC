@@ -17,6 +17,6 @@ def trivia():
         [1, 2, 3, 4],
         4 
     ]
-    return jsonify(answers)
+    return jsonify({"answers": answers})
 
 
