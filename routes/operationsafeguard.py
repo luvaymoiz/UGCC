@@ -1,5 +1,4 @@
-import json
-from heapq import heappop, heappush
+# routes/operationsafeguard.py
 import logging
 import re
 from flask import request, jsonify
@@ -17,7 +16,7 @@ def mirror_words(s: str) -> str:
     return " ".join(w[::-1] for w in s.split(" "))
 
 def encode_mirror_alphabet(s: str) -> str:
-    # inverse == forward (Atbash)
+    # Atbash; inverse == forward
     def m(c):
         if "a" <= c <= "z":
             return chr(ord("z") - (ord(c) - ord("a")))
@@ -31,7 +30,7 @@ def toggle_case(s: str) -> str:
     return "".join(c.lower() if c.isupper() else c.upper() if c.islower() else c for c in s)
 
 def swap_pairs_word(w: str) -> str:
-    # inverse == forward (swap neighbors)
+    # inverse == forward
     a = list(w)
     for i in range(0, len(a) - 1, 2):
         a[i], a[i+1] = a[i+1], a[i]
@@ -42,14 +41,12 @@ def swap_pairs(s: str) -> str:
 
 def encode_index_parity_word(w: str) -> str:
     # forward: even indices then odd indices (0-based)
-    evens = w[::2]
-    odds  = w[1::2]
-    return evens + odds
+    return w[::2] + w[1::2]
 
 def decode_index_parity_word(w: str) -> str:
     # inverse of encode_index_parity_word
     n = len(w)
-    k = (n + 1) // 2  # count of evens
+    k = (n + 1) // 2  # number of evens
     evens, odds = w[:k], w[k:]
     out = []
     for i in range(n):
@@ -84,49 +81,73 @@ def double_consonants_decode(s: str) -> str:
             i += 1
     return "".join(out)
 
-# Map the *forward* transform name to its inverse function for decoding
+# map forward transform name -> inverse function
 INVERSE = {
     "mirror_words": mirror_words,
     "encode_mirror_alphabet": encode_mirror_alphabet,
     "toggle_case": toggle_case,
     "swap_pairs": swap_pairs,
-    "encode_index_parity": decode_index_parity,  # inverse of encode_index_parity
+    "encode_index_parity": decode_index_parity,
     "double_consonants": double_consonants_decode,
 }
 
-def decode_challenge_one(transformed_word: str, transformations_str: str) -> str:
-    # transformations_str like: "[encode_mirror_alphabet(x), double_consonants(x), ...]"
-    names = re.findall(r'([a-zA-Z_]+)\s*\(x\)', transformations_str)
-    # Apply inverses in reverse order
+def _parse_transformation_names(tfs):
+    """
+    Accepts:
+      - string: "[encode_mirror_alphabet(x), double_consonants(x), ...]"
+      - list of names: ["encode_mirror_alphabet", "double_consonants", ...]
+      - list with parens: ["encode_mirror_alphabet(x)", "double_consonants(x)"]
+    Returns: list[str] of names
+    """
+    if isinstance(tfs, str):
+        return re.findall(r'([a-zA-Z_]+)\s*\(x\)', tfs)
+    if isinstance(tfs, list):
+        names = []
+        for item in tfs:
+            if isinstance(item, str):
+                m = re.match(r'^\s*([a-zA-Z_]+)\s*(?:\(\s*x\s*\))?\s*$', item)
+                if m:
+                    names.append(m.group(1))
+        return names
+    return []
+
+def decode_challenge_one(transformed_word: str, transformations) -> str:
+    names = _parse_transformation_names(transformations)
     s = transformed_word
-    for name in reversed(names):
+    for name in reversed(names):  # reverse order
         inv = INVERSE.get(name)
         if not inv:
-            raise ValueError(f"Unknown transformation: {name}")
+            logger.warning("Unknown transform: %s", name)
+            continue
         s = inv(s)
     return s
 
 # ----------------------------
-# Challenge 2: pattern from coordinates (stub you can refine)
+# Challenge 2: coordinates → number (placeholder; returns size of filtered cluster)
 # ----------------------------
 def extract_number_from_coordinates(coords):
+    """
+    coords: list of [lat, lng] (strings or numbers)
+    Strategy:
+      - Parse to floats
+      - Filter out far outliers via simple MAD rule
+      - Return the count of the filtered set (deterministic integer)
+    Replace with the real intended logic once you infer the pattern.
+    """
     try:
         pts = []
         for a, b in coords:
             pts.append((float(a), float(b)))
         if not pts:
             return 0
-
-        # MAD-based outlier filter
         import statistics as st
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         mx, my = st.median(xs), st.median(ys)
         madx = st.median([abs(x - mx) for x in xs]) or 1.0
         mady = st.median([abs(y - my) for y in ys]) or 1.0
-        filt = [(x, y) for (x, y) in pts if abs(x - mx) / madx <= 3 and abs(y - my) / mady <= 3]
+        filt = [(x, y) for (x, y) in pts if abs(x - mx)/madx <= 3 and abs(y - my)/mady <= 3]
         return len(filt)
     except Exception:
-        # Fallback: count
         return len(coords or [])
 
 # ----------------------------
@@ -134,34 +155,27 @@ def extract_number_from_coordinates(coords):
 # ----------------------------
 def railfence3_decrypt(ct: str) -> str:
     n = len(ct)
-    idx = []
+    # rail index pattern 0..1..2..1..0..
+    rail_idx = []
     r, dr = 0, 1
-    for i in range(n):
-        idx.append(r)
+    for _ in range(n):
+        rail_idx.append(r)
         if r == 0: dr = 1
         elif r == 2: dr = -1
         r += dr
-
-    rail_counts = [idx.count(ri) for ri in (0,1,2)]
-    rails = []
-    pos = 0
-    for rc in rail_counts:
-        rails.append(list(ct[pos:pos+rc]))
-        pos += rc
-    pointers = [0,0,0]
+    # count per rail
+    counts = [rail_idx.count(i) for i in (0,1,2)]
+    rails, p = [], 0
+    for c in counts:
+        rails.append(list(ct[p:p+c])); p += c
+    pos = [0,0,0]
     out = []
-    for r in idx:
-        out.append(rails[r][pointers[r]])
-        pointers[r] += 1
+    for r in rail_idx:
+        out.append(rails[r][pos[r]])
+        pos[r] += 1
     return "".join(out)
 
-def keyword_substitution_tables(keyword: str):
-    """
-    Build monoalphabetic substitution based on KEYWORD (e.g., SHADOW).
-    We'll assume encryption used the keyword alphabet -> plaintext alphabet mapping.
-      enc alphabet: keyword + remaining letters (A..Z without duplicates, I/J as-is)
-      dec map: cipher letter -> plain letter
-    """
+def keyword_substitution_decode_map(keyword: str):
     kw = []
     seen = set()
     for c in keyword.upper():
@@ -170,17 +184,16 @@ def keyword_substitution_tables(keyword: str):
     for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         if c not in seen:
             seen.add(c); kw.append(c)
-    enc_alphabet = "".join(kw)                
-    plain_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"  
-    decode_map = {enc_alphabet[i]: plain_alphabet[i] for i in range(26)}
-    return decode_map
+    enc = "".join(kw)  # cipher alphabet
+    plain = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    return {enc[i]: plain[i] for i in range(26)}
 
 def keyword_decrypt(ct: str, keyword: str = "SHADOW") -> str:
-    dec = keyword_substitution_tables(keyword)
+    dec = keyword_substitution_decode_map(keyword)
     out = []
     for c in ct.upper():
         if c.isalpha():
-            out.append(dec[c])
+            out.append(dec.get(c, c))
         else:
             out.append(c)
     return "".join(out)
@@ -193,10 +206,9 @@ def polybius_decrypt(ct: str) -> str:
         "Q","R","S","T","U",
         "V","W","X","Y","Z"
     ]
-   
     digits = re.findall(r'\d{2}', ct)
     if not digits:
-        return ct.replace("J", "I").replace("j", "i")
+        return ct.replace("J","I").replace("j","i")
     out = []
     for d in digits:
         r = int(d[0]) - 1
@@ -206,15 +218,12 @@ def polybius_decrypt(ct: str) -> str:
 
 def rot13(s: str) -> str:
     def tr(c):
-        if 'a' <= c <= 'z':
-            return chr((ord(c)-97+13)%26 + 97)
-        if 'A' <= c <= 'Z':
-            return chr((ord(c)-65+13)%26 + 65)
+        if 'a' <= c <= 'z': return chr((ord(c)-97+13)%26 + 97)
+        if 'A' <= c <= 'Z': return chr((ord(c)-65+13)%26 + 65)
         return c
     return "".join(tr(c) for c in s)
 
 def parse_log_entry(entry: str):
-    # Parse "K: V | K: V | ..." and return dict
     fields = {}
     for part in entry.split("|"):
         if ":" in part:
@@ -224,9 +233,8 @@ def parse_log_entry(entry: str):
 
 def decode_challenge_three(entry: str) -> str:
     f = parse_log_entry(entry)
-    ctype = f.get("CIPHER_TYPE", "").upper().replace(" ", "_")
+    ctype = (f.get("CIPHER_TYPE", "")).upper().replace(" ", "_")
     payload = f.get("ENCRYPTED_PAYLOAD", "")
-
     if ctype == "RAILFENCE":
         return railfence3_decrypt(payload)
     elif ctype == "KEYWORD":
@@ -236,43 +244,33 @@ def decode_challenge_three(entry: str) -> str:
     elif ctype in ("ROTATION_CIPHER", "ROT13", "CAESAR_13"):
         return rot13(payload)  # e.g., SVERJNYY -> FIREWALL
     else:
-        # Unknown type; return raw for visibility
         return payload
 
 # ----------------------------
-# Challenge 4: final synthesis (adjust once you know their exact rule)
+# Challenge 4: Final synthesis (adjust to spec when known)
 # ----------------------------
 def final_synthesis(c1: str, c2: str, c3: str) -> str:
-    # placeholder: combine succinctly; you can replace with the intended rule when known
+    # placeholder joiner; tweak once you know the exact rule
     return f"{c1}|{c2}|{c3}"
 
 # ----------------------------
-# The endpoint
+# Endpoint
 # ----------------------------
 @app.route("/operation-safeguard", methods=["POST"])
 def operation_safeguard():
-    """
-    Expects JSON per spec and returns:
-    {
-      "challenge_one": "...",
-      "challenge_two": "...",
-      "challenge_three": "...",
-      "challenge_four": "..."
-    }
-    """
     data = request.get_json(force=True, silent=False)
 
-    # --- Challenge 1 ---
+    # Challenge 1
     c1_in = data.get("challenge_one", {}) or {}
-    tf_str = c1_in.get("transformations", "") or ""
+    tfs = c1_in.get("transformations")
     transformed = c1_in.get("transformed_encrypted_word", "") or ""
     try:
-        c1 = decode_challenge_one(transformed, tf_str) if transformed else ""
-    except Exception as e:
+        c1 = decode_challenge_one(transformed, tfs) if transformed else ""
+    except Exception:
         logger.exception("Challenge 1 decode failed")
         c1 = ""
 
-    # --- Challenge 2 ---
+    # Challenge 2
     coords = data.get("challenge_two", []) or []
     try:
         c2 = extract_number_from_coordinates(coords)
@@ -280,7 +278,7 @@ def operation_safeguard():
         logger.exception("Challenge 2 analysis failed")
         c2 = 0
 
-    # --- Challenge 3 ---
+    # Challenge 3
     entry = data.get("challenge_three", "") or ""
     try:
         c3 = decode_challenge_three(entry) if entry else ""
@@ -288,12 +286,13 @@ def operation_safeguard():
         logger.exception("Challenge 3 decrypt failed")
         c3 = ""
 
-    # --- Challenge 4 ---
+    # Challenge 4
     c4 = final_synthesis(str(c1), str(c2), str(c3))
 
+    # Grader requires strings for all values
     return jsonify({
-    "challenge_one":  str(c1) if c1 is not None else "",
-    "challenge_two":  str(c2) if c2 is not None else "",
-    "challenge_three": str(c3) if c3 is not None else "",
-    "challenge_four": str(c4) if c4 is not None else ""
-})
+        "challenge_one":   "" if c1 is None else str(c1),
+        "challenge_two":   "" if c2 is None else str(c2),
+        "challenge_three": "" if c3 is None else str(c3),
+        "challenge_four":  "" if c4 is None else str(c4),
+    })
