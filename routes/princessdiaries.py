@@ -123,18 +123,19 @@ def evaluate_princess_diaries():
     """
     try:
         # Get the JSON data that the client sent
-        input_data = request.get_json()
-        logger.info(f"Received data for evaluation: {input_data}")
+        data = request.get_json()
+        input_value = data.get("input")
+        logger.info(f"Received data for evaluation: {input_value}")
 
         # Call your logic function to get the result
-        result = solve_princess_schedule(input_data)
+        result = solve_princess_schedule(input_value)
         logger.info(f"Calculation result: {result}")
 
         # =============================================================
         # THIS IS THE CORRECT WAY TO RETURN THE RESPONSE
         # It uses jsonify() as you rightly pointed out.
         # =============================================================
-        return jsonify(result)
+        return json.dumps(result)
 
     except Exception as e:
         logger.error(f"An error occurred during evaluation: {e}")
