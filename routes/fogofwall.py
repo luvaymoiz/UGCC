@@ -1,209 +1,284 @@
 from flask import Flask, request, jsonify
-from collections import deque
 import json
+from typing import Dict, List, Tuple, Set, Optional
+import heapq
+from collections import deque
 
 app = Flask(__name__)
 
-# This dictionary will store the state for each game instance.
-# In a real-world scenario, this would be a database.
-game_states = {}
-
-# Game state keys:
-# 'map': 2D list representing the discovered maze,
-#        0 for empty, 1 for wall, -1 for unknown.
-# 'crows': list of crow dictionaries [{'id': '1', 'x': 0, 'y': 0}, ...]
-# 'known_walls': set of wall coordinates in "x-y" format
-# 'num_of_walls': total number of walls to find
-# 'length_of_grid': size of the grid
-# 'scanned_cells': set of cells that have been scanned
-
-def _update_map_from_scan(game_state, scan_result, crow_id):
-    """
-    Updates the global game map with the results of a scan action.
-    """
-    crow = next(c for c in game_state['crows'] if c['id'] == crow_id)
-    crow_x, crow_y = crow['x'], crow['y']
-
-    for i in range(5):
-        for j in range(5):
-            scan_char = scan_result[i][j]
-            # Calculate absolute grid coordinates from relative scan coordinates
-            map_x = crow_x + (j - 2)
-            map_y = crow_y + (i - 2)
-
-            if 0 <= map_x < game_state['length_of_grid'] and 0 <= map_y < game_state['length_of_grid']:
-                if scan_char == 'W':
-                    game_state['map'][map_y][map_x] = 1 # Wall
-                    game_state['known_walls'].add(f"{map_x}-{map_y}")
-                elif scan_char == '_':
-                    game_state['map'][map_y][map_x] = 0 # Empty
+class FogOfWallSolver:
+    def __init__(self):
+        self.games: Dict[str, 'GameState'] = {}
     
-    # Add the crow's current position to the set of scanned cells
-    game_state['scanned_cells'].add((crow_x, crow_y))
-    
-def _is_valid_move(game_state, x, y):
-    """
-    Checks if a position is valid and not a known wall.
-    """
-    if 0 <= x < game_state['length_of_grid'] and 0 <= y < game_state['length_of_grid']:
-        # We can move into an unknown cell (-1) or an empty cell (0)
-        return game_state['map'][y][x] in [-1, 0]
-    return False
+    def get_or_create_game(self, game_id: str, test_case: dict = None) -> 'GameState':
+        if game_id not in self.games:
+            if test_case is None:
+                raise ValueError(f"Game {game_id} not found and no test_case provided")
+            self.games[game_id] = GameState(test_case)
+        return self.games[game_id]
 
-def _find_next_target(game_state, crow_pos):
-    """
-    Finds the nearest unscanned or unknown cell using BFS.
-    Returns the target position (x, y) or None if all cells are known.
-    """
-    q = deque([(crow_pos, [])]) # (position, path)
-    visited = {crow_pos}
-    
-    # Directions: N, S, E, W
-    directions = [(0, -1), (0, 1), (1, 0), (-1, 0)]
-    
-    while q:
-        (x, y), path = q.popleft()
+class GameState:
+    def __init__(self, test_case: dict):
+        self.game_id = test_case['game_id']
+        self.length_of_grid = test_case['length_of_grid']
+        self.num_of_walls = test_case['num_of_walls']
         
-        # Check if this cell is a valid scan target
-        if (x, y) not in game_state['scanned_cells']:
-            return (x, y)
-
-        for dx, dy in directions:
-            next_x, next_y = x + dx, y + dy
-            if (next_x, next_y) not in visited and _is_valid_move(game_state, next_x, next_y):
-                visited.add((next_x, next_y))
-                q.append(((next_x, next_y), path + [(next_x, next_y)]))
-
-    return None
-
-def _get_next_action(game_state):
-    """
-    The main AI logic for determining the next move or scan.
-    """
-    # Check if all walls have been found.
-    if len(game_state['known_walls']) == game_state['num_of_walls']:
-        return {
-            "action_type": "submit",
-            "submission": sorted(list(game_state['known_walls']))
-        }
-    
-    # Simple strategy: Find a crow at an unscanned location and command it to scan.
-    for crow in game_state['crows']:
-        if (crow['x'], crow['y']) not in game_state['scanned_cells']:
-            return {
-                "crow_id": crow['id'],
-                "action_type": "scan"
+        # Initialize crows
+        self.crows = {}
+        for crow_data in test_case['crows']:
+            self.crows[crow_data['id']] = {
+                'x': crow_data['x'],
+                'y': crow_data['y']
             }
-
-    # If all crows are in scanned locations, move one towards an unknown area.
-    best_crow = None
-    best_path = float('inf')
-    best_target = None
-    
-    # Simple strategy for now: pick the first crow and find a target.
-    # In a more advanced solution, we could pick the crow closest to the next target.
-    crow = game_state['crows'][0]
-    target_pos = _find_next_target(game_state, (crow['x'], crow['y']))
-    
-    if target_pos:
-        # Find the path to the target and get the first step.
-        q = deque([((crow['x'], crow['y']), [])])
-        visited = {(crow['x'], crow['y'])}
-        path_to_target = None
         
-        directions = [(0, -1, 'N'), (0, 1, 'S'), (1, 0, 'E'), (-1, 0, 'W')]
+        # Initialize knowledge maps
+        self.known_cells: Set[Tuple[int, int]] = set()  # Cells we've scanned
+        self.walls: Set[Tuple[int, int]] = set()  # Confirmed wall positions
+        self.empty_cells: Set[Tuple[int, int]] = set()  # Confirmed empty positions
         
-        while q:
-            (x, y), path = q.popleft()
-            if (x, y) == target_pos:
-                path_to_target = path
-                break
+        # Track scan coverage
+        self.scanned_areas: Set[Tuple[int, int]] = set()  # Center positions of 5x5 scans
+        
+        # Movement tracking
+        self.move_count = 0
+        self.max_moves = self.length_of_grid ** 2
+        
+        # Strategy state
+        self.exploration_phase = True
+        self.current_crow_index = 0
+        self.crow_ids = list(self.crows.keys())
+    
+    def update_crow_position(self, crow_id: str, new_pos: List[int]):
+        """Update crow position after a move"""
+        self.crows[crow_id]['x'] = new_pos[0]
+        self.crows[crow_id]['y'] = new_pos[1]
+        self.move_count += 1
+    
+    def process_scan_result(self, crow_id: str, scan_result: List[List[str]]):
+        """Process the 5x5 scan result and update our knowledge"""
+        crow_x = self.crows[crow_id]['x']
+        crow_y = self.crows[crow_id]['y']
+        
+        # Mark this position as scanned
+        self.scanned_areas.add((crow_x, crow_y))
+        
+        # Process the 5x5 grid (centered on crow)
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                grid_x = crow_x + dx
+                grid_y = crow_y + dy
+                scan_x = dx + 2
+                scan_y = dy + 2
+                
+                cell_value = scan_result[scan_y][scan_x]
+                
+                if cell_value == 'X':  # Out of bounds
+                    continue
+                elif cell_value == 'W':  # Wall
+                    self.walls.add((grid_x, grid_y))
+                    self.known_cells.add((grid_x, grid_y))
+                elif cell_value == '_' or cell_value == 'C':  # Empty or crow
+                    self.empty_cells.add((grid_x, grid_y))
+                    self.known_cells.add((grid_x, grid_y))
+        
+        self.move_count += 1
+    
+    def get_unexplored_cells(self) -> Set[Tuple[int, int]]:
+        """Get cells that haven't been scanned yet"""
+        all_cells = set()
+        for x in range(self.length_of_grid):
+            for y in range(self.length_of_grid):
+                all_cells.add((x, y))
+        
+        explored_cells = set()
+        for scan_center in self.scanned_areas:
+            cx, cy = scan_center
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    ex, ey = cx + dx, cy + dy
+                    if 0 <= ex < self.length_of_grid and 0 <= ey < self.length_of_grid:
+                        explored_cells.add((ex, ey))
+        
+        return all_cells - explored_cells
+    
+    def find_optimal_scan_position(self, crow_id: str) -> Optional[Tuple[int, int]]:
+        """Find the best position to scan that covers the most unexplored cells"""
+        crow_x = self.crows[crow_id]['x']
+        crow_y = self.crows[crow_id]['y']
+        unexplored = self.get_unexplored_cells()
+        
+        if not unexplored:
+            return None
+        
+        best_pos = None
+        best_score = -1
+        
+        # Consider positions within reasonable distance
+        search_radius = 10
+        for target_x in range(max(0, crow_x - search_radius), 
+                            min(self.length_of_grid, crow_x + search_radius + 1)):
+            for target_y in range(max(0, crow_y - search_radius), 
+                                min(self.length_of_grid, crow_y + search_radius + 1)):
+                
+                # Skip if already scanned from this position
+                if (target_x, target_y) in self.scanned_areas:
+                    continue
+                
+                # Skip if this is a known wall
+                if (target_x, target_y) in self.walls:
+                    continue
+                
+                # Count how many unexplored cells this scan would cover
+                coverage = 0
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        check_x, check_y = target_x + dx, target_y + dy
+                        if (check_x, check_y) in unexplored:
+                            coverage += 1
+                
+                if coverage > 0:
+                    # Factor in distance (prefer closer positions)
+                    distance = abs(target_x - crow_x) + abs(target_y - crow_y)
+                    score = coverage * 10 - distance
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_pos = (target_x, target_y)
+        
+        return best_pos
+    
+    def find_path(self, start: Tuple[int, int], end: Tuple[int, int]) -> List[str]:
+        """Find shortest path from start to end, avoiding known walls"""
+        if start == end:
+            return []
+        
+        # BFS pathfinding
+        queue = deque([(start, [])])
+        visited = {start}
+        
+        directions = [('N', 0, -1), ('S', 0, 1), ('E', 1, 0), ('W', -1, 0)]
+        
+        while queue:
+            (x, y), path = queue.popleft()
             
-            for dx, dy, direction in directions:
-                next_x, next_y = x + dx, y + dy
-                if (next_x, next_y) not in visited and _is_valid_move(game_state, next_x, next_y):
-                    visited.add((next_x, next_y))
-                    q.append(((next_x, next_y), path + [direction]))
+            for dir_name, dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                
+                # Check bounds
+                if not (0 <= nx < self.length_of_grid and 0 <= ny < self.length_of_grid):
+                    continue
+                
+                # Skip known walls
+                if (nx, ny) in self.walls:
+                    continue
+                
+                # Skip visited
+                if (nx, ny) in visited:
+                    continue
+                
+                new_path = path + [dir_name]
+                
+                if (nx, ny) == end:
+                    return new_path
+                
+                queue.append(((nx, ny), new_path))
+                visited.add((nx, ny))
         
-        if path_to_target and len(path_to_target) > 0:
-             return {
-                "crow_id": crow['id'],
-                "action_type": "move",
-                "direction": path_to_target[0]
+        return []  # No path found
+    
+    def get_next_action(self) -> dict:
+        """Determine the next action to take"""
+        # Check if we've found all walls
+        if len(self.walls) >= self.num_of_walls:
+            return {
+                'action_type': 'submit',
+                'submission': [f"{x}-{y}" for x, y in self.walls]
             }
+        
+        # Check if we're running out of moves
+        if self.move_count >= self.max_moves - 1:
+            return {
+                'action_type': 'submit',
+                'submission': [f"{x}-{y}" for x, y in self.walls]
+            }
+        
+        # Round-robin between crows
+        crow_id = self.crow_ids[self.current_crow_index]
+        self.current_crow_index = (self.current_crow_index + 1) % len(self.crow_ids)
+        
+        crow_x = self.crows[crow_id]['x']
+        crow_y = self.crows[crow_id]['y']
+        
+        # If we haven't scanned from current position, scan first
+        if (crow_x, crow_y) not in self.scanned_areas:
+            return {
+                'action_type': 'scan',
+                'crow_id': crow_id
+            }
+        
+        # Find optimal position to move and scan
+        target_pos = self.find_optimal_scan_position(crow_id)
+        
+        if target_pos is None:
+            # No good scan positions found, submit what we have
+            return {
+                'action_type': 'submit',
+                'submission': [f"{x}-{y}" for x, y in self.walls]
+            }
+        
+        # Find path to target position
+        path = self.find_path((crow_x, crow_y), target_pos)
+        
+        if not path:
+            # Can't reach target, try to scan from current position anyway
+            return {
+                'action_type': 'scan',
+                'crow_id': crow_id
+            }
+        
+        # Move towards target
+        return {
+            'action_type': 'move',
+            'crow_id': crow_id,
+            'direction': path[0]
+        }
 
-    # If no more unexplored areas, submit what we have found.
-    return {
-        "action_type": "submit",
-        "submission": sorted(list(game_state['known_walls']))
-    }
-
+solver = FogOfWallSolver()
 
 @app.route('/fogofwall', methods=['POST'])
 def fog_of_wall():
-    """
-    Main endpoint for the Fog of Wall challenge.
-    """
     try:
-        payload = request.get_json()
-        game_id = payload.get("game_id")
+        data = request.json
+        challenger_id = data['challenger_id']
+        game_id = data['game_id']
         
-        if not game_id:
-            return jsonify({"error": "game_id is required."}), 400
-            
-        # Initial request
-        if "test_case" in payload:
-            test_case = payload["test_case"]
-            length_of_grid = test_case["length_of_grid"]
-            num_of_walls = test_case["num_of_walls"]
-            
-            # Initialize game state
-            game_states[game_id] = {
-                'map': [[-1] * length_of_grid for _ in range(length_of_grid)],
-                'crows': test_case['crows'],
-                'known_walls': set(),
-                'num_of_walls': num_of_walls,
-                'length_of_grid': length_of_grid,
-                'scanned_cells': set()
-            }
-            # Initial action: Scan with the first crow to get a starting map
-            return jsonify({
-                "challenger_id": payload['challenger_id'],
-                "game_id": game_id,
-                "crow_id": test_case['crows'][0]['id'],
-                "action_type": "scan"
-            })
-            
-        # Subsequent request with results
-        elif "previous_action" in payload:
-            game_state = game_states.get(game_id)
-            if not game_state:
-                return jsonify({"error": "Game state not found."}), 404
-            
-            prev_action = payload['previous_action']
-            crow_id = prev_action['crow_id']
-            
-            if prev_action['your_action'] == 'scan':
-                _update_map_from_scan(game_state, prev_action['scan_result'], crow_id)
-            elif prev_action['your_action'] == 'move':
-                # Find the crow and update its position
-                crow = next(c for c in game_state['crows'] if c['id'] == crow_id)
-                new_pos = prev_action['move_result']
-                crow['x'] = new_pos[0]
-                crow['y'] = new_pos[1]
-                
-            # Get the next action based on the updated state
-            next_action = _get_next_action(game_state)
-            
-            # Add common payload fields and return
-            next_action['challenger_id'] = payload['challenger_id']
-            next_action['game_id'] = game_id
-            
-            return jsonify(next_action)
-            
+        # Handle initial request
+        if 'test_case' in data:
+            game = solver.get_or_create_game(game_id, data['test_case'])
+            action = game.get_next_action()
         else:
-            return jsonify({"error": "Invalid payload format."}), 400
-
+            # Handle subsequent requests with previous action results
+            game = solver.get_or_create_game(game_id)
+            
+            if 'previous_action' in data:
+                prev_action = data['previous_action']
+                
+                if prev_action['your_action'] == 'move':
+                    game.update_crow_position(prev_action['crow_id'], prev_action['move_result'])
+                elif prev_action['your_action'] == 'scan':
+                    game.process_scan_result(prev_action['crow_id'], prev_action['scan_result'])
+            
+            action = game.get_next_action()
+        
+        # Prepare response
+        response = {
+            'challenger_id': challenger_id,
+            'game_id': game_id,
+            **action
+        }
+        
+        return jsonify(response)
+    
     except Exception as e:
-        app.logger.error(f"An error occurred: {e}", exc_info=True)
-        return jsonify({"error": "An unexpected error occurred."}), 500
+        print(f"Error: {e}")
+        return jsonify({'error': str(e)}), 500
