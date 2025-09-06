@@ -29,6 +29,29 @@ def extract_cycle(start_v, pred, n):
     cycle.reverse()  # order along edges (cycle[0] -> cycle[1] -> ...)
     return cycle
 
+def rotate_cycle_canonical(cycle, goods, rate_map):
+    """
+    Rotate cycle so it starts at the node with the largest incoming edge rate.
+    Ties broken by lexicographically smallest good name.
+    cycle: [n0, n1, ..., nk-1] describing edges ni -> n(i+1 mod k)
+    """
+    k = len(cycle)
+    if k == 0:
+        return cycle[:]
+    # compute incoming rate to each node
+    scored = []
+    for i in range(k):
+        cur = cycle[i]
+        prev = cycle[(i - 1) % k]
+        r = rate_map.get((prev, cur), 0.0)
+        scored.append((r, goods[cur], i))  # (incoming rate, name, index)
+    # pick the node with max incoming rate; tie-break by name
+    rmax, _, imax = max(scored, key=lambda t: (t[0], -ord(t[1][0]) if t[1] else 0, t[1]))
+    # rotate
+    rotated = cycle[imax:] + cycle[:imax]
+    return rotated
+
+
 def cycle_gain(cycle, rate_map):
     prod = 1.0
     for i in range(len(cycle)):
@@ -84,11 +107,14 @@ def best_arbitrage(goods, ratios):
     if not best_cycle:
         return [], 0.0
 
-    # Build names path; sample shows start repeated at end
+    
+    best_cycle = rotate_cycle_canonical(best_cycle, goods, rate_map)
+
     names = [goods[i] for i in best_cycle]
-    names.append(names[0])
+    names.append(names[0])  
     gain_pct = (best_prod - 1.0) * 100.0
     return names, gain_pct
+
 
 @app.route("/The-Ink-Archive", methods=["POST"])
 def the_ink_archive():
