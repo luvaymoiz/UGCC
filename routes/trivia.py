@@ -18,13 +18,21 @@ def trivia():
     5,    # Q8: "Capture The Flag" (all are anagrams)
     4,                   # Q9: "Filler 1"
     3,                     #10
+    3,#11
+    2,#12
+    4,#12
+    1,#12
+    2,#12
+    1,#12
+    1,#12
+    2,
+    2,
+    1,
+    1,
+    2,
     3,
-    2,
-    4,
-    1,
-    2,
-    1,
-    1
+    3,
+    2
   ]
     logging.info("answers : %s", answers)
     return jsonify({"answers": answers})
