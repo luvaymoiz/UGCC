@@ -14,13 +14,21 @@ def inkarchive():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    # Extract goods and rates from the JSON data
-    goods = data.get("goods", [])
-    rates = data.get("rates", [])
+    # Check if 'data' is a list or dictionary and handle accordingly
+    if isinstance(data, list):
+        # If it's a list, we assume the format is already structured correctly
+        goods = data[0].get("goods", [])  # Assuming the goods data is inside the first list item
+        rates = data[0].get("rates", [])
+    elif isinstance(data, dict):
+        goods = data.get("goods", [])
+        rates = data.get("rates", [])
+    else:
+        return jsonify({"error": "Invalid data format"}), 400
 
     if not goods or not rates:
         return jsonify({"error": "Invalid data: 'goods' and 'rates' are required."}), 400
 
+    # Continue processing as usual
     # Number of goods
     n = len(goods)
 
