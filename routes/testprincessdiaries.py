@@ -1,12 +1,7 @@
-from flask import Flask
-
-app = Flask(__name__)
-import routes.square
-import routes.princessdiaries
-import routes.trivia
 import os
-
-
+import sys
+import requests
+import json
 
 # Your live server's URL. We'll get this from an environment variable in the GitHub Action.
 # Fallback to your URL for local testing.
