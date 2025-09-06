@@ -16,7 +16,15 @@ def trivia():
     4,                  # Q6: "Universal Bureau of Surveillance" (Amy Winehouse)
     1,                  # Q7: "Operation Safeguard"
     5,    # Q8: "Capture The Flag" (all are anagrams)
-    4                   # Q9: "Filler 1"
+    4,                   # Q9: "Filler 1"
+    3,                     #10
+    3,
+    2,
+    4,
+    1,
+    2,
+    1,
+    1
   ]
     logging.info("answers : %s", answers)
     return jsonify({"answers": answers})
