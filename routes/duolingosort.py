@@ -135,8 +135,9 @@ def sort_numbers_part_one(input_list):
     sorted_numbers = sorted(input_list, key=sort_key)
     return [str(sort_key(value)) for value in sorted_numbers]
 
-# Sorting logic for Part 2 (Multiple languages)
+# Sorting logic for Part 2 (Multiple languages, including Roman numerals, English, Chinese, German, and Arabic)
 def sort_numbers_part_two(input_list):
+    # Sort the list using the key function that also respects language order
     return sorted(input_list, key=sort_key)
 
 @app.route("/duolingo-sort", methods=["POST"])
