@@ -18,8 +18,7 @@ def trivia():
     [1, 2, 3, 4, 5],    # Q8: "Capture The Flag" (all are anagrams)
     4                   # Q9: "Filler 1"
   ]
-    result = answers
-    logging.info("answers :{}".format(result))
-    return json.dumps(result)
+    logging.info("answers : %s", answers)
+    return jsonify({"answers": answers})
 
 
