@@ -73,8 +73,3 @@ def blankety_blanks():
     except Exception as e:
         # Generic error handling for unexpected issues
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
-
-if __name__ == '__main__':
-    # Running the Flask application
-    # In a production environment, you would use a more robust server like Gunicorn or uWSGI
-    app.run(debug=True, host='0.0.0.0', port=5000)
