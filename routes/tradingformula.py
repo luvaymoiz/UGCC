@@ -1,3 +1,4 @@
+import sys
 from flask import Flask, request, jsonify
 import ast
 import math
@@ -7,213 +8,126 @@ from routes import app
 
 logger = logging.getLogger(__name__)
 
-
-
-# ---------- Helpers to sanitize & transform LaTeX-ish input ----------
-
-GREEK = {
-    "alpha","beta","gamma","delta","epsilon","zeta","eta","theta","iota","kappa",
-    "lambda","mu","nu","xi","omicron","pi","rho","sigma","tau","upsilon",
-    "phi","chi","psi","omega"
+# --- 1. LaTeX to Python Translation ---
+LATEX_REPLACEMENTS = {
+    "=": "",
+    "$$": "",
+    "$": "",
+    "\\text": "",
+    "\\{": "(",
+    "\\}": ")",
+    "{": "(",
+    "}": ")",
+    "\\left(": "(",
+    "\\right)": ")",
+    "\\times": "*",
+    "\\cdot": "*",
+    "\\frac": "",  # Handled by regex
+    "e^": "math.exp",
+    "^": "**",
+    "\\log": "math.log",
+    "\\max": "max",
+    "\\min": "min",
+    "\\sum": "sum",
+    "\\alpha": "alpha", "\\beta": "beta", "\\gamma": "gamma", "\\delta": "delta",
+    "\\epsilon": "epsilon", "\\zeta": "zeta", "\\eta": "eta", "\\theta": "theta",
+    "\\iota": "iota", "\\kappa": "kappa", "\\lambda": "lambda", "\\mu": "mu",
+    "\\nu": "nu", "\\xi": "xi", "\\omicron": "omicron", "\\pi": "pi",
+    "\\rho": "rho", "\\sigma": "sigma", "\\tau": "tau", "\\upsilon": "upsilon",
+    "\\phi": "phi", "\\chi": "chi", "\\psi": "psi", "\\omega": "omega"
 }
 
-
-def strip_math_delims(s: str) -> str:
-    s = s.strip()
-    # remove $$...$$ or $...$
-    if (s.startswith("$$") and s.endswith("$$")) or (s.startswith("$") and s.endswith("$")):
-        s = s.strip("$")
-    return s
-
-def rhs_of_assignment(s: str) -> str:
-    # allow "Fee = ..." or "SR = ..." → take right hand side
-    if "=" in s:
-        return s.split("=", 1)[1]
-    return s
-
-def replace_text_command(s: str) -> str:
-    # \text{TradeAmount} → TradeAmount
-    return re.sub(r"\\text\{([^}]+)\}", lambda m: m.group(1).replace(" ", ""), s)
-
-def normalize_subscripts(s: str) -> str:
-    # Z_\alpha -> Z_alpha ; sigma_p -> sigma_p ; X_{long} -> X_long
-    s = re.sub(r"_\{([A-Za-z][A-Za-z0-9_]*)\}", r"_\1", s)   # _{p} -> _p
-    s = re.sub(r"_\\([A-Za-z]+)", lambda m: "_" + m.group(1), s)  # _\alpha -> _alpha
-    s = re.sub(r"\\([a-z]+)_", lambda m: (m.group(1) if m.group(1) in GREEK else "\\"+m.group(1)) + "_", s)
-    # \sigma_p (var name) -> sigma_p (drop backslash when it's a symbol name)
-    s = re.sub(r"\\([a-z]+)", lambda m: m.group(1) if m.group(1) in GREEK else "\\" + m.group(1), s)
-    return s
-
-def bracket_to_underscore(s: str) -> str:
-    # E[R_p] -> E_R_p ; X[i] -> X_i
-    return re.sub(r"([A-Za-z]+)\[([^\]]+)\]", r"\1_\2", s)
-
-def replace_operators(s: str) -> str:
-    # \cdot, \times -> *
-    s = s.replace(r"\cdot", "*").replace(r"\times", "*")
-    # \left( ... \right) -> ( ... )
-    s = s.replace(r"\left", "").replace(r"\right", "")
-    return s
-
-def replace_frac(s: str) -> str:
-    # Replace \frac{A}{B} with (A)/(B) using a stack to match nested braces
-    def repl_frac(match):
-        start = match.start()
-        # we are at '\frac{'
-        i = match.end()  # position after '\frac{'
-        # find A
-        a, i = read_braced(s, i-1)   # i-1 is at '{'
-        # i now at char after A's closing brace, expect '/'
-        if i >= len(s) or s[i] != '/':
-            return s[match.start():i]
-        i += 1  # skip '/'
-        # next should be '{'
-        b, j = read_braced(s, i)
-        return f"(({a})/({b}))", match.start(), j
-
-    def read_braced(text, pos_open_brace):
-        # pos_open_brace points at '{'
-        assert text[pos_open_brace] == '{'
-        depth = 0
-        i = pos_open_brace
-        i += 1
-        start = i
-        while i < len(text):
-            if text[i] == '{':
-                depth += 1
-            elif text[i] == '}':
-                if depth == 0:
-                    return text[start:i], i+1
-                depth -= 1
-            i += 1
-        raise ValueError("Unbalanced braces in \\frac")
-
-    # iterate and replace all \frac occurrences
-    i = 0
-    out = []
-    while i < len(s):
-        m = re.search(r"\\frac\{", s[i:])
-        if not m:
-            out.append(s[i:])
-            break
-        m_start = i + m.start()
-        out.append(s[i:m_start])
-        # perform replacement from m_start
-        content, start, new_i = repl_frac(re.match(r"\\frac\{", s[m_start:]).re.match, )  # dummy to please linter
-        # easier: call our own using string slice
-        # Recompute using local slice
-        local = s[m_start:]
-        # read A and B using helpers
-        a, idx = read_braced(local, local.find('{'))  # after \frac
-        if local[idx] != '/':
-            raise ValueError("Malformed \\frac")
-        b, idx2 = read_braced(local, idx+1)
-        out.append(f"(({a})/({b}))")
-        i = m_start + idx2
-    return "".join(out)
-
-def frac_pass(s: str) -> str:
-    # simpler robust pass: repeatedly replace first \frac{...}{...} using regex that matches balanced braces shallowly
-    # This approximate works for your given tests.
-    pattern = re.compile(r"\\frac\{([^{}]+)\}\{([^{}]+)\}")
-    while True:
-        new_s, n = pattern.subn(r"((\1)/(\2))", s)
-        if n == 0:
-            return s
-        s = new_s
-
-def replace_pow_and_exp(s: str) -> str:
-    # ^ -> **  (both ^{...} and ^x)
-    s = re.sub(r"\^\{([^}]+)\}", r"**(\1)", s)
-    s = re.sub(r"\^([A-Za-z0-9_\.]+)", r"**(\1)", s)
-    # e**(something) -> math.exp(something)
-    s = re.sub(r"\be\*\*\(([^)]+)\)", r"math.exp(\1)", s)
-    return s
-
-def replace_funcs(s: str) -> str:
-    # \max(,) and \min(,) -> max/min
-    s = s.replace(r"\max", "max").replace(r"\min", "min")
-    # log(x) -> math.log(x)  (both \log and log)
-    s = s.replace(r"\log", "log")
-    s = re.sub(r"\blog\s*\(", "math.log(", s)
-    return s
-
-def latex_to_python(expr: str) -> str:
-    expr = strip_math_delims(expr)
-    expr = rhs_of_assignment(expr)
-    expr = replace_text_command(expr)
-    expr = replace_operators(expr)
-    expr = normalize_subscripts(expr)
-    expr = bracket_to_underscore(expr)
-    expr = frac_pass(expr)
-    expr = replace_pow_and_exp(expr)
-    expr = replace_funcs(expr)
-    # remove stray braces that sometimes remain around groups
-    expr = expr.replace("{", "(").replace("}", ")")
+def latex_to_python_safe(expr: str) -> str:
+    """
+    A robust function to translate LaTeX to a Python expression.
+    """
+    # Use re.sub to handle fractions like \frac{num}{den} -> (num)/(den)
+    expr = re.sub(r'\\frac\s*\{([^}]+)\}\s*\{([^}]+)\}', r'(\1)/(\2)', expr)
+    
+    # Use re.sub for cleaner variable name replacement
+    expr = re.sub(r'\\([A-Za-z]+)', r'\1', expr)  # Replace Greek letters
+    expr = re.sub(r'([A-Za-z0-9_]+)\[([^\]]+)\]', r'\1_\2', expr) # E[R_p] -> E_R_p
+    
+    # Apply all other simple string replacements
+    for latex, python in LATEX_REPLACEMENTS.items():
+        expr = expr.replace(latex, python)
+        
     return expr.strip()
 
-# ---------- Safe evaluator using ast ----------
+# --- 2. Safe Expression Evaluation ---
+ALLOWED_NODES = {
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Load, ast.Constant,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.USub, ast.UAdd,
+    ast.Call, ast.Name, ast.Attribute, ast.Tuple, ast.Compare, ast.BoolOp, ast.And, ast.Or,
+    ast.Gt, ast.Lt, ast.Eq, ast.NotEq, ast.GtE, ast.LtE
+}
 
 ALLOWED_NAMES = {
     "math": math,
     "max": max,
     "min": min,
+    "sum": sum,
+    "abs": abs,
 }
 
-ALLOWED_NODES = {
-    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Load, ast.Constant,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.USub, ast.UAdd,
-    ast.Call, ast.Name, ast.Attribute, ast.Tuple
-}
+def _check_ast_nodes(node):
+    if type(node) not in ALLOWED_NODES:
+        raise ValueError(f"Disallowed expression syntax: {type(node).__name__}")
+    for child in ast.iter_child_nodes(node):
+        _check_ast_nodes(child)
 
 def safe_eval(expr: str, variables: dict) -> float:
-    # build a safe environment: variables + allowed names
-    env = {**ALLOWED_NAMES}
-    # expose variables as plain names
-    env.update(variables)
+    """
+    Safely evaluates a Python expression string using an AST whitelist.
+    """
+    if not expr.strip():
+        raise ValueError("Expression is empty.")
 
+    # The evaluation environment, including allowed functions and variables
+    env = {**ALLOWED_NAMES, **variables}
+    
+    # Parse the expression into an AST
     node = ast.parse(expr, mode="eval")
 
-    def _check(n):
-        if type(n) not in ALLOWED_NODES:
-            raise ValueError(f"Disallowed expression: {type(n).__name__}")
-        for child in ast.iter_child_nodes(n):
-            _check(child)
-    _check(node)
-
+    # Check the AST against the whitelist
+    _check_ast_nodes(node)
+    
+    # If checks pass, compile and evaluate the expression in the safe environment
     return float(eval(compile(node, "<expr>", "eval"), {"__builtins__": {}}, env))
 
-# ---------- API ----------
-
-def normalize_vars(vars_in: dict) -> dict:
-    """Accepts keys like Z_alpha, sigma_p, E_R_p (your JSON) and exposes them
-    to the evaluator exactly with those names."""
-    norm = {}
-    for k, v in vars_in.items():
-        norm[k] = float(v)
-        # also expose versions that might appear after transformations:
-        # e.g., if someone wrote Z_\alpha and it became Z_alpha, we already have that
-    return norm
-
-def evaluate_case(case: dict) -> dict:
-    formula = case.get("formula", "")
-    variables = case.get("variables", {})
-    if not isinstance(variables, dict):
-        raise ValueError("`variables` must be an object/dict")
-    expr = latex_to_python(formula)
-    val = safe_eval(expr, normalize_vars(variables))
-    return {"result": round(val, 4)}
-
+# --- 3. API Endpoint ---
 @app.route("/trading-formula", methods=["POST"])
-def trading_formula():
-    data = request.get_json(force=True)
+def trading_formula_endpoint():
     try:
-        if isinstance(data, list):
-            return jsonify([evaluate_case(c) for c in data])
-        elif isinstance(data, dict):
-            return jsonify(evaluate_case(data))
-        else:
-            return jsonify({"error": "JSON must be an object or an array"}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        test_cases = request.get_json()
+        if not isinstance(test_cases, list):
+            return jsonify({"error": "Input must be a JSON array"}), 400
 
+        results = []
+        for case in test_cases:
+            try:
+                formula = case.get("formula", "")
+                variables = {k: float(v) for k, v in case.get("variables", {}).items()}
+                
+                logger.info(f"Processing formula: {formula} with variables: {variables}")
+
+                # Translate and evaluate
+                python_expr = latex_to_python_safe(formula)
+                value = safe_eval(python_expr, variables)
+                
+                # Format and append result
+                results.append({"result": f"{value:.4f}"})
+
+            except Exception as e:
+                logger.error(f"Error evaluating case: {e}. Original formula: '{case.get('formula')}'")
+                results.append({"result": f"Error: {e}"})
+
+        return jsonify(results)
+
+    except Exception as e:
+        logger.error(f"A server error occurred: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --- 4. Main execution block for local testing ---
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5001, debug=True)
