@@ -14,6 +14,7 @@ import routes.blanketyblanks
 import routes.fogofwall
 import routes.duolingosort
 import routes.sailingclub
+import routes.themagesgambit
 import os
 
 
