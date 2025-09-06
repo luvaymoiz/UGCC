@@ -2,6 +2,7 @@ import sys
 import logging
 from flask import Flask, request, jsonify
 from routes import app
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def solve_princess_schedule(data):
 
 # --- API Endpoint ---
 # This defines the URL and method for our API.
-@app.route('/evaluate', methods=['POST'])
+@app.route('/testprincessdiaries', methods=['POST'])
 def evaluate_princessdiaries():
     # Get the JSON data sent in the request body
     input_data = request.get_json()
@@ -133,4 +134,4 @@ def evaluate_princessdiaries():
     logger.info(f"Returned: {result}")
     
     # Return the result as a JSON response
-    return jsonify(result)
+    return json.dumps(result)
