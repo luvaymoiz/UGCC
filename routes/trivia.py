@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 @app.route("/trivia", methods=["GET"])
 def trivia():
     answers = [
-    2,                  # Q1: "Trivia!"
+    4,                  # Q1: "Trivia!"
     1,                  # Q2: "Ticketing Agent"
     2,                  # Q3: "Blankety Blanks"
     2,                  # Q4: "Princess Diaries"
