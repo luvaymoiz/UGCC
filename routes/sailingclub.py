@@ -1,58 +1,59 @@
+import logging
 from flask import request, jsonify
-from routes import app
+from routes import app   
 
-def merge_slots(slots):
-    if not slots:
+logger = logging.getLogger(__name__)
+
+def merge_slots(bookings):
+    if not bookings:
         return []
-    slots = sorted((int(s), int(e)) for s, e in slots)
-    merged = []
-    cs, ce = slots[0]
-    for s, e in slots[1:]:
-        if s <= ce:          # overlaps OR touches (s == ce)
-            ce = max(ce, e)
+
+    bookings.sort(key=lambda x: x[0])
+    merged = [bookings[0]]
+
+    for current in bookings[1:]:
+        last = merged[-1]
+        if current[0] <= last[1]:
+            last[1] = max(last[1], current[1])
         else:
-            merged.append([cs, ce])
-            cs, ce = s, e
-    merged.append([cs, ce])
+            merged.append(current[:])
     return merged
 
-def min_boats_needed(slots):
-    if not slots:
-        return 0
-    events = []
-    for s, e in slots:
-        s, e = int(s), int(e)
-        events.append((s, +1))
-        events.append((e, -1))  
-    events.sort(key=lambda t: (t[0], t[1]))
-    cur = best = 0
-    for _, delta in events:
-        cur += delta
-        if cur > best:
-            best = cur
-    return best
+def min_boats(bookings):
+    starts = sorted([s for s, e in bookings])
+    ends = sorted([e for s, e in bookings])
+    boats = 0
+    max_boats = 0
+    i = j = 0
+
+    while i < len(starts) and j < len(ends):
+        if starts[i] < ends[j]:
+            boats += 1
+            max_boats = max(max_boats, boats)
+            i += 1
+        else:
+            boats -= 1
+            j += 1
+    return max_boats
 
 @app.route("/sailing-club/submission", methods=["POST"])
 def sailing_club_submission():
-    data = request.get_json(silent=True) or {}
-    tcs = data.get("testCases", [])
-    if not isinstance(tcs, list):
-        return jsonify({"error": "Body must contain key 'testCases' as a list"}), 400
+    try:
+        data = request.get_json(force=True, silent=False)
+        solutions = []
 
-    solutions = []
-    for tc in tcs:
-        tc_id = tc.get("id")
-        raw = tc.get("input", [])
-        if not tc_id:
-            return jsonify({"error": "Each test case must have an 'id'"}), 400
-        # Part 1
-        merged = merge_slots(raw)
-        # Part 2
-        boats = min_boats_needed(raw)
-        solutions.append({
-            "id": tc_id,
-            "sortedMergedSlots": merged,
-            "minBoatsNeeded": boats
-        })
+        for case in data.get("testCases", []):
+            bookings = [list(slot) for slot in case.get("input", [])]
+            merged = merge_slots(bookings)
+            boats = min_boats(bookings)
 
-    return jsonify({"solutions": solutions})
+            solutions.append({
+                "id": case["id"],
+                "sortedMergedSlots": merged,
+                "minBoatsNeeded": boats
+            })
+
+        return jsonify({"solutions": solutions})
+    except Exception:
+        logger.exception("Error in /sailing-club/submission")
+        return jsonify({"error": "internal error"}), 500
