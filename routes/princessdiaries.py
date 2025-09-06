@@ -12,7 +12,13 @@ logger = logging.getLogger(__name__)
 # --- Solution Code ---
 # This is the solver function from the previous response.
 
-def solve_princess_schedule(data):
+def solve_princess_schedule():
+    data = request.get_json()
+    input_value = data.get("input")
+    logger.info(f"Received data for evaluation: {input_value}")
+
+        # Call your logic function to get the result
+    
     """
     Finds the optimal schedule for the princess to maximize score and minimize travel fees.
     """
@@ -110,38 +116,10 @@ def solve_princess_schedule(data):
         schedule_names.append(tasks[curr_index]['name'])
         curr_index = parent[curr_index]
     schedule_names.reverse()
-
-    return {
+    result = {
         "max_score": max_score,
         "min_fee": min_fee,
         "schedule": schedule_names
     }
-
-def evaluate_princess_diaries():
-    """
-    This function handles the web request.
-    """
-    try:
-        # Get the JSON data that the client sent
-        data = request.get_json()
-        input_value = data.get("input")
-        logger.info(f"Received data for evaluation: {input_value}")
-
-        # Call your logic function to get the result
-        result = solve_princess_schedule(input_value)
-        logger.info(f"Calculation result: {result}")
-
-        # =============================================================
-        # THIS IS THE CORRECT WAY TO RETURN THE RESPONSE
-        # It uses jsonify() as you rightly pointed out.
-        # =============================================================
-        return json.dumps(result)
-
-    except Exception as e:
-        logger.error(f"An error occurred during evaluation: {e}")
-        # Also use jsonify for error messages
-        return jsonify({"error": "An internal server error occurred."}), 500
-
-
-# ... (The rest of your solve_princess_schedule function is below this) ...
+    return json.dumps(result)
 
