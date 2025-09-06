@@ -292,8 +292,8 @@ def operation_safeguard():
     c4 = final_synthesis(str(c1), str(c2), str(c3))
 
     return jsonify({
-        "challenge_one": c1,
-        "challenge_two": c2,
-        "challenge_three": c3,
-        "challenge_four": c4
-    })
+    "challenge_one":  str(c1) if c1 is not None else "",
+    "challenge_two":  str(c2) if c2 is not None else "",
+    "challenge_three": str(c3) if c3 is not None else "",
+    "challenge_four": str(c4) if c4 is not None else ""
+})
