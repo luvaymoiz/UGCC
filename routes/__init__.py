@@ -15,6 +15,7 @@ import routes.fogofwall
 import routes.duolingosort
 import routes.sailingclub
 import routes.themagesgambit
+import routes.slsm
 import os
 
 
