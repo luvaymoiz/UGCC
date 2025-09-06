@@ -12,6 +12,7 @@ import routes.theinkarchive
 import routes.operationsafeguard
 import routes.blanketyblanks
 import routes.fogofwall
+import routes.sailingclub
 import os
 
 
