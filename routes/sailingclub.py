@@ -38,7 +38,6 @@ def min_boats(bookings):
 
 @app.route("/sailing-club/submission", methods=["POST"])
 def sailing_club_submission():
-    try:
         data = request.get_json(force=True, silent=False)
         solutions = []
 
@@ -54,6 +53,3 @@ def sailing_club_submission():
             })
 
         return jsonify({"solutions": solutions})
-    except Exception:
-        logger.exception("Error in /sailing-club/submission")
-        return jsonify({"error": "internal error"}), 500
