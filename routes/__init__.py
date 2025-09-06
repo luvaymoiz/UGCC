@@ -17,6 +17,7 @@ import routes.sailingclub
 import routes.themagesgambit
 import routes.slsm
 import routes.tradingbot
+import routes.slpu
 import os
 
 
